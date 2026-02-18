@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Dict
 
 import numpy as np
@@ -25,6 +26,36 @@ def _normalize_channel_name(name: str) -> str:
     return "".join(ch for ch in name.upper().strip() if ch.isalnum() or ch in {"_", "-"})
 
 
+def _decode_cfg_with_fallback(cfg_path: Path) -> str:
+    raw = cfg_path.read_bytes()
+    encodings = ("utf-8", "utf-8-sig", "cp1252", "latin-1")
+
+    for encoding in encodings:
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    raise ValueError("Não foi possível decodificar o arquivo CFG com codificações conhecidas (UTF-8/CP1252/Latin-1).")
+
+
+def _load_recorder(cfg: Path, dat: Path) -> Comtrade:
+    recorder = Comtrade()
+    try:
+        recorder.load(str(cfg), str(dat))
+        return recorder
+    except UnicodeDecodeError:
+        cfg_text = _decode_cfg_with_fallback(cfg)
+
+    with TemporaryDirectory(prefix="cfg_utf8_") as tmp:
+        tmp_cfg = Path(tmp) / cfg.name
+        tmp_cfg.write_text(cfg_text, encoding="utf-8", newline="\n")
+
+        recorder = Comtrade()
+        recorder.load(str(tmp_cfg), str(dat))
+        return recorder
+
+
 def load_comtrade(cfg_path: str | Path, dat_path: str | Path) -> ComtradeData:
     cfg = Path(cfg_path)
     dat = Path(dat_path)
@@ -32,8 +63,7 @@ def load_comtrade(cfg_path: str | Path, dat_path: str | Path) -> ComtradeData:
     if not cfg.exists() or not dat.exists():
         raise FileNotFoundError("Arquivo CFG ou DAT não encontrado.")
 
-    recorder = Comtrade()
-    recorder.load(str(cfg), str(dat))
+    recorder = _load_recorder(cfg, dat)
 
     analog = {
         _normalize_channel_name(channel): np.asarray(values, dtype=float)
