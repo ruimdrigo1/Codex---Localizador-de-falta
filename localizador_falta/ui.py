@@ -82,6 +82,8 @@ class MainWindow(QMainWindow):
         distance_layout = QHBoxLayout(distance_box)
         self.z1_mag_input = QLineEdit("12.0")
         self.z1_ang_input = QLineEdit("75.0")
+        self.z0_mag_input = QLineEdit("36.0")
+        self.z0_ang_input = QLineEdit("75.0")
         self.lt_len_input = QLineEdit("100.0")
         self.dist_result_label = QLabel("Distância: aguardando cálculo")
         self.dist_result_label.setObjectName("statusWarn")
@@ -89,6 +91,10 @@ class MainWindow(QMainWindow):
         distance_layout.addWidget(self.z1_mag_input)
         distance_layout.addWidget(QLabel("∠Z1 (graus):"))
         distance_layout.addWidget(self.z1_ang_input)
+        distance_layout.addWidget(QLabel("|Z0| (ohm):"))
+        distance_layout.addWidget(self.z0_mag_input)
+        distance_layout.addWidget(QLabel("∠Z0 (graus):"))
+        distance_layout.addWidget(self.z0_ang_input)
         distance_layout.addWidget(QLabel("LT total (km):"))
         distance_layout.addWidget(self.lt_len_input)
         distance_layout.addWidget(self.dist_result_label, 3)
@@ -184,21 +190,24 @@ class MainWindow(QMainWindow):
         self.cfg_label.setText(f"CFG: {cfg}")
         self.dat_label.setText(f"DAT: {dat}")
 
-    def _read_distance_inputs(self) -> tuple[complex, float]:
+    def _read_distance_inputs(self) -> tuple[complex, complex, float]:
         try:
             z1_mag = float(self.z1_mag_input.text().replace(",", "."))
             z1_ang_deg = float(self.z1_ang_input.text().replace(",", "."))
+            z0_mag = float(self.z0_mag_input.text().replace(",", "."))
+            z0_ang_deg = float(self.z0_ang_input.text().replace(",", "."))
             lt_len = float(self.lt_len_input.text().replace(",", "."))
         except ValueError as exc:
             raise ValueError("Campos de distância inválidos. Use números para |Z1|, ângulo e LT.") from exc
 
         z1 = z1_mag * np.exp(1j * np.radians(z1_ang_deg))
-        return z1, lt_len
+        z0 = z0_mag * np.exp(1j * np.radians(z0_ang_deg))
+        return z1, z0, lt_len
 
     def _update_distance_panel(self, result: DistanceEstimate) -> None:
         self.dist_result_label.setObjectName("statusOk")
         self.dist_result_label.setText(
-            f"A: {result.km_from_a:.2f} km | B: {result.km_from_b:.2f} km | m={result.m_pu:.3f} pu | Zapp={abs(result.z1_app):.2f}∠{np.degrees(np.angle(result.z1_app)):.1f}°"
+            f"Loop {result.loop_used} | A: {result.km_from_a:.2f} km | B: {result.km_from_b:.2f} km | m={result.m_pu:.3f} pu | Zapp={abs(result.z_app):.2f}∠{np.degrees(np.angle(result.z_app)):.1f}°"
         )
         self.dist_result_label.style().unpolish(self.dist_result_label)
         self.dist_result_label.style().polish(self.dist_result_label)
@@ -214,8 +223,8 @@ class MainWindow(QMainWindow):
             data = load_comtrade(cfg_text, dat_text)
             report = analyze_fault(data)
             protections = evaluate_protections(report)
-            z1, lt_len = self._read_distance_inputs()
-            distance = estimate_fault_distance(data, z1, lt_len)
+            z1, z0, lt_len = self._read_distance_inputs()
+            distance = estimate_fault_distance(data, report, z1, lt_len, z0_ohm_per_line=z0)
             self.current_data = data
         except Exception as exc:
             QMessageBox.critical(self, "Erro na análise", str(exc))
@@ -340,7 +349,7 @@ class MainWindow(QMainWindow):
             f"[T={report.fault_start_s:.4f}s] Início de distúrbio detectado",
             f"Tipo de falta identificado: {report.detected_fault}",
             f"Fase provável: {report.probable_phase}",
-            f"Distância estimada: A={distance.km_from_a:.2f} km | B={distance.km_from_b:.2f} km",
+            f"Distância estimada ({distance.loop_used}): A={distance.km_from_a:.2f} km | B={distance.km_from_b:.2f} km",
             f"Canal digital monitorado: {len(data.status)}",
         ]
 

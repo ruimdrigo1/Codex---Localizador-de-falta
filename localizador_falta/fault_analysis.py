@@ -41,7 +41,8 @@ class DistanceEstimate:
     m_pu: float
     km_from_a: float
     km_from_b: float
-    z1_app: complex
+    z_app: complex
+    loop_used: str
 
 
 def _find_channel(analog: Dict[str, np.ndarray], aliases: tuple[str, ...]) -> np.ndarray:
@@ -103,6 +104,41 @@ def _get_fault_window(data: ComtradeData) -> tuple[int, int]:
     return start_idx, end_idx
 
 
+def _fault_phasors(data: ComtradeData) -> dict[str, complex]:
+    start_idx, end_idx = _get_fault_window(data)
+
+    va = _find_channel(data.analog, PHASE_ALIASES["VA"])
+    vb = _find_channel(data.analog, PHASE_ALIASES["VB"])
+    vc = _find_channel(data.analog, PHASE_ALIASES["VC"])
+    ia = _find_channel(data.analog, PHASE_ALIASES["A"])
+    ib = _find_channel(data.analog, PHASE_ALIASES["B"])
+    ic = _find_channel(data.analog, PHASE_ALIASES["C"])
+
+    va_ph = _phasor(va[start_idx:end_idx], data.frequency, data.sample_rate)
+    vb_ph = _phasor(vb[start_idx:end_idx], data.frequency, data.sample_rate)
+    vc_ph = _phasor(vc[start_idx:end_idx], data.frequency, data.sample_rate)
+    ia_ph = _phasor(ia[start_idx:end_idx], data.frequency, data.sample_rate)
+    ib_ph = _phasor(ib[start_idx:end_idx], data.frequency, data.sample_rate)
+    ic_ph = _phasor(ic[start_idx:end_idx], data.frequency, data.sample_rate)
+
+    i0 = (ia_ph + ib_ph + ic_ph) / 3
+    a = np.exp(1j * 2 * np.pi / 3)
+    v1 = (va_ph + a * vb_ph + a**2 * vc_ph) / 3
+    i1 = (ia_ph + a * ib_ph + a**2 * ic_ph) / 3
+
+    return {
+        "VA": va_ph,
+        "VB": vb_ph,
+        "VC": vc_ph,
+        "IA": ia_ph,
+        "IB": ib_ph,
+        "IC": ic_ph,
+        "I0": i0,
+        "V1": v1,
+        "I1": i1,
+    }
+
+
 def analyze_fault(data: ComtradeData) -> FaultReport:
     ia = _find_channel(data.analog, PHASE_ALIASES["A"])
     ib = _find_channel(data.analog, PHASE_ALIASES["B"])
@@ -140,42 +176,70 @@ def analyze_fault(data: ComtradeData) -> FaultReport:
     )
 
 
-def estimate_fault_distance(data: ComtradeData, z1_pos_ohm: complex, line_length_km: float) -> DistanceEstimate:
-    if abs(z1_pos_ohm) < 1e-9:
+def _distance_factor(z_app: complex, z1_pos_ohm_per_line: complex) -> float:
+    denom = max(abs(z1_pos_ohm_per_line) ** 2, 1e-9)
+    # projeção no eixo da impedância da linha (abordagem típica de relé de distância)
+    return float(np.real(z_app * np.conj(z1_pos_ohm_per_line)) / denom)
+
+
+def estimate_fault_distance(
+    data: ComtradeData,
+    report: FaultReport,
+    z1_pos_ohm_per_line: complex,
+    line_length_km: float,
+    z0_ohm_per_line: complex | None = None,
+) -> DistanceEstimate:
+    if abs(z1_pos_ohm_per_line) < 1e-9:
         raise ValueError("Z1 positiva não pode ser zero.")
     if line_length_km <= 0:
         raise ValueError("Comprimento da LT deve ser maior que zero.")
 
-    va = _find_channel(data.analog, PHASE_ALIASES["VA"])
-    vb = _find_channel(data.analog, PHASE_ALIASES["VB"])
-    vc = _find_channel(data.analog, PHASE_ALIASES["VC"])
-    ia = _find_channel(data.analog, PHASE_ALIASES["A"])
-    ib = _find_channel(data.analog, PHASE_ALIASES["B"])
-    ic = _find_channel(data.analog, PHASE_ALIASES["C"])
+    z0 = z0_ohm_per_line if z0_ohm_per_line is not None else z1_pos_ohm_per_line
+    k0 = (z0 - z1_pos_ohm_per_line) / (3 * z1_pos_ohm_per_line)
 
-    start_idx, end_idx = _get_fault_window(data)
+    p = _fault_phasors(data)
+    fault = report.detected_fault.upper()
 
-    va_ph = _phasor(va[start_idx:end_idx], data.frequency, data.sample_rate)
-    vb_ph = _phasor(vb[start_idx:end_idx], data.frequency, data.sample_rate)
-    vc_ph = _phasor(vc[start_idx:end_idx], data.frequency, data.sample_rate)
-    ia_ph = _phasor(ia[start_idx:end_idx], data.frequency, data.sample_rate)
-    ib_ph = _phasor(ib[start_idx:end_idx], data.frequency, data.sample_rate)
-    ic_ph = _phasor(ic[start_idx:end_idx], data.frequency, data.sample_rate)
+    if "FASE-TERRA" in fault:
+        ph = report.probable_phase.upper()
+        if ph == "A":
+            z_app = p["VA"] / (p["IA"] + 3 * k0 * p["I0"])
+            loop = "AG"
+        elif ph == "B":
+            z_app = p["VB"] / (p["IB"] + 3 * k0 * p["I0"])
+            loop = "BG"
+        else:
+            z_app = p["VC"] / (p["IC"] + 3 * k0 * p["I0"])
+            loop = "CG"
+    elif "BIFÁSICA" in fault:
+        pair = report.probable_phase.upper()
+        if "AB" in pair:
+            z_app = (p["VA"] - p["VB"]) / (p["IA"] - p["IB"])
+            loop = "AB"
+        elif "BC" in pair:
+            z_app = (p["VB"] - p["VC"]) / (p["IB"] - p["IC"])
+            loop = "BC"
+        else:
+            z_app = (p["VC"] - p["VA"]) / (p["IC"] - p["IA"])
+            loop = "CA"
+    else:
+        if abs(p["I1"]) < 1e-9:
+            raise ValueError("I1 muito baixa para cálculo de distância.")
+        z_app = p["V1"] / p["I1"]
+        loop = "SEQ1"
 
-    a = np.exp(1j * 2 * np.pi / 3)
-    v1 = (va_ph + a * vb_ph + a**2 * vc_ph) / 3
-    i1 = (ia_ph + a * ib_ph + a**2 * ic_ph) / 3
+    m = np.clip(_distance_factor(z_app, z1_pos_ohm_per_line), 0.0, 1.2)
 
-    if abs(i1) < 1e-9:
-        raise ValueError("I1 muito baixa para cálculo de distância.")
+    km_a = float(min(max(m, 0.0), 1.0) * line_length_km)
+    km_b = float(line_length_km - km_a)
 
-    z1_app = v1 / i1
-    m = np.clip(abs(z1_app) / abs(z1_pos_ohm), 0.0, 1.0)
-
-    km_a = float(m * line_length_km)
-    km_b = float((1.0 - m) * line_length_km)
-
-    return DistanceEstimate(m_pu=float(m), km_from_a=km_a, km_from_b=km_b, z1_app=z1_app)
+    return DistanceEstimate(
+        m_pu=float(m),
+        km_from_a=km_a,
+        km_from_b=km_b,
+        z_app=z_app,
+        loop_used=loop,
+    )
 
 
 def get_available_channels(data: ComtradeData) -> List[str]:
