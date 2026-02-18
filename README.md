@@ -9,6 +9,7 @@ Aplicação desktop profissional para engenharia de proteção, com foco em aná
 - Cálculo de componentes simétricas (`I0`, `I1`, `I2`).
 - Classificação de tipo de falta e fase provável.
 - Painel de proteções ANSI com indicação de atuação estimada.
+- Cálculo da distância da falta por impedância positiva (entradas de Z1 e comprimento da LT, com distância por terminal A/B).
 - Compatível com arquivos CFG em UTF-8, UTF-8 BOM, CP1252 e Latin-1 (fallback automático).
 - Interface desktop em padrão profissional (PySide6 + gráficos).
 
