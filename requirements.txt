@@ -1,0 +1,5 @@
+comtrade==0.1.2
+numpy==1.26.4
+pyqtgraph==0.13.7
+PySide6==6.7.2
+PyInstaller==6.10.0
