@@ -58,6 +58,7 @@ class NegativeSeqDistanceResult:
     root_1: float
     root_2: float
     method_note: str
+    selected_root: str
 
 
 def _find_channel(analog: Dict[str, np.ndarray], aliases: tuple[str, ...]) -> np.ndarray:
@@ -305,40 +306,29 @@ def estimate_negative_sequence_distance_two_terminal(
     if abs(A) < 1e-12:
         raise ValueError("Coeficiente A inválido para solução da equação de 2º grau.")
 
-    disc = B * B - 4 * A * C
-    note = "raiz real direta"
+    minus_b = -B
+    b_sq = B * B
+    four_a_c = 4 * A * C
+    disc = b_sq - four_a_c
 
     if disc >= 0:
-        sqrt_disc = complex(np.sqrt(disc), 0.0)
+        sqrt_disc = float(np.sqrt(disc))
+        note = "modo planilha: Δ real"
     else:
-        # Evita falha operacional: em caso de discriminante negativo,
-        # usa raízes complexas e seleciona a parte real fisicamente consistente.
-        sqrt_disc = np.sqrt(complex(disc, 0.0))
-        note = "discriminante negativo: solução via raízes complexas"
+        sqrt_disc = float(np.sqrt(abs(disc)))
+        note = "modo planilha: Δ<0, usando |Δ| para raiz"
 
-    r1 = (-B + sqrt_disc) / (2 * A)
-    r2 = (-B - sqrt_disc) / (2 * A)
+    two_a = 2 * A
+    # Reproduz exatamente a lógica da planilha de referência enviada
+    first_numerator = b_sq
+    second_numerator = minus_b - sqrt_disc
 
-    m1 = float(np.real(r1))
-    m2 = float(np.real(r2))
+    m1 = float(first_numerator / two_a)
+    m2 = float(second_numerator / two_a)
 
-    candidates = []
-    for r in (r1, r2):
-        if abs(np.imag(r)) <= 0.05:
-            candidates.append(float(np.real(r)))
-
-    valid_roots = [m for m in candidates if 0 <= m <= 1]
-    if valid_roots:
-        m = valid_roots[0]
-    elif candidates:
-        m = min(candidates, key=lambda root: min(abs(root), abs(root - 1)))
-        note += " | raiz real fora de faixa, aplicada saturação"
-    else:
-        # fallback robusto se as duas raízes forem fortemente complexas
-        m = float(np.clip(-B / (2 * A), 0.0, 1.0))
-        note += " | fallback por vértice parabólico"
-
-    km_s = max(0.0, min(1.0, m)) * line_length_km
+    m = m1
+    selected_root = "m1"
+    km_s = m * line_length_km
     km_r = line_length_km - km_s
 
     return NegativeSeqDistanceResult(
@@ -353,6 +343,7 @@ def estimate_negative_sequence_distance_two_terminal(
         root_1=m1,
         root_2=m2,
         method_note=note,
+        selected_root=selected_root,
     )
 
 

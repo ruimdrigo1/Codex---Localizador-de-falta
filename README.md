@@ -11,7 +11,7 @@ Aplicação desktop profissional para engenharia de proteção, com foco em aná
 - Painel de proteções ANSI com indicação de atuação estimada.
 - Módulo dedicado de localização por sequência negativa (2 terminais), com entradas manuais de TERMINAL S/R, impedância total da LT, comprimento em km, V2/I2 na extremidade S e V2/I2 na extremidade R (conforme planilha de referência).
 - Compatível com arquivos CFG em UTF-8, UTF-8 BOM, CP1252 e Latin-1 (fallback automático).
-- Tratamento robusto para casos numéricos com discriminante negativo no método de sequência negativa (fallback sem interrupção do cálculo).
+- Modo de cálculo alinhado à planilha de referência (incluindo lógica da Eq. de 2º grau no formato usado na planilha).
 - Interface desktop em padrão profissional (PySide6 + gráficos).
 
 ## Requisitos
