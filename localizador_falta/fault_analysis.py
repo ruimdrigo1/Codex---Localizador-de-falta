@@ -45,6 +45,20 @@ class DistanceEstimate:
     loop_used: str
 
 
+@dataclass
+class NegativeSeqDistanceResult:
+    terminal_s: str
+    terminal_r: str
+    m_pu: float
+    km_from_s: float
+    km_from_r: float
+    z2lt: complex
+    z2s: complex
+    z2r: complex
+    root_1: float
+    root_2: float
+
+
 def _find_channel(analog: Dict[str, np.ndarray], aliases: tuple[str, ...]) -> np.ndarray:
     for alias in aliases:
         for key, value in analog.items():
@@ -64,6 +78,10 @@ def _phasor(signal: np.ndarray, base_frequency: float, sample_rate: float) -> co
 
 def _rms(signal: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(signal))))
+
+
+def _polar(mod: float, ang_deg: float) -> complex:
+    return mod * np.exp(1j * np.radians(ang_deg))
 
 
 def _classify_fault(rms: Dict[str, float], s: SymmetricalComponents) -> tuple[str, str, float]:
@@ -178,7 +196,6 @@ def analyze_fault(data: ComtradeData) -> FaultReport:
 
 def _distance_factor(z_app: complex, z1_pos_ohm_per_line: complex) -> float:
     denom = max(abs(z1_pos_ohm_per_line) ** 2, 1e-9)
-    # projeção no eixo da impedância da linha (abordagem típica de relé de distância)
     return float(np.real(z_app * np.conj(z1_pos_ohm_per_line)) / denom)
 
 
@@ -229,16 +246,92 @@ def estimate_fault_distance(
         loop = "SEQ1"
 
     m = np.clip(_distance_factor(z_app, z1_pos_ohm_per_line), 0.0, 1.2)
-
     km_a = float(min(max(m, 0.0), 1.0) * line_length_km)
     km_b = float(line_length_km - km_a)
 
-    return DistanceEstimate(
+    return DistanceEstimate(m_pu=float(m), km_from_a=km_a, km_from_b=km_b, z_app=z_app, loop_used=loop)
+
+
+def estimate_negative_sequence_distance_two_terminal(
+    terminal_s: str,
+    terminal_r: str,
+    z2lt_mod: float,
+    z2lt_ang_deg: float,
+    line_length_km: float,
+    v2s_mod: float,
+    v2s_ang_deg: float,
+    i2s_mod: float,
+    i2s_ang_deg: float,
+    v2r_mod: float,
+    v2r_ang_deg: float,
+    i2r_mod: float,
+    i2r_ang_deg: float,
+) -> NegativeSeqDistanceResult:
+    if line_length_km <= 0:
+        raise ValueError("Comprimento da LT deve ser maior que zero.")
+    if z2lt_mod <= 0:
+        raise ValueError("Impedância total da LT deve ser maior que zero.")
+
+    z2lt = _polar(z2lt_mod, z2lt_ang_deg)
+    v2s = _polar(v2s_mod, v2s_ang_deg)
+    i2s = _polar(i2s_mod, i2s_ang_deg)
+    v2r = _polar(v2r_mod, v2r_ang_deg)
+    i2r = _polar(i2r_mod, i2r_ang_deg)
+
+    if abs(i2s) < 1e-9 or abs(i2r) < 1e-9:
+        raise ValueError("I2 das extremidades deve ser diferente de zero.")
+
+    z2s = v2s / i2s
+    z2r = v2r / i2r
+
+    # Forma equivalente à planilha: A*m² + B*m + C = 0
+    # com parâmetros complexos a..h derivados de I2S*Z2S, I2S*Z2LT, Z2R+Z2LT, Z2LT
+    k = abs(i2r) ** 2
+    x = i2s * z2s
+    y = i2s * z2lt
+    u = z2r + z2lt
+    w = z2lt
+
+    a, b = np.real(x), np.imag(x)
+    c, d = np.real(y), np.imag(y)
+    e, f = np.real(u), np.imag(u)
+    g, h = np.real(w), np.imag(w)
+
+    A = k * (g * g + h * h) - (c * c + d * d)
+    B = -2 * (k * (e * g + f * h) + (a * c + b * d))
+    C = k * (e * e + f * f) - (a * a + b * b)
+
+    if abs(A) < 1e-12:
+        raise ValueError("Coeficiente A inválido para solução da equação de 2º grau.")
+
+    disc = B * B - 4 * A * C
+    if disc < 0:
+        raise ValueError("Discriminante negativo no cálculo de distância por sequência negativa.")
+
+    sqrt_disc = float(np.sqrt(disc))
+    m1 = float((-B + sqrt_disc) / (2 * A))
+    m2 = float((-B - sqrt_disc) / (2 * A))
+
+    valid_roots = [m for m in (m1, m2) if 0 <= m <= 1]
+    if valid_roots:
+        m = valid_roots[0]
+    else:
+        m = min((m1, m2), key=lambda root: min(abs(root), abs(root - 1)))
+
+    km_s = max(0.0, min(1.0, m)) * line_length_km
+    km_r = line_length_km - km_s
+
+    return NegativeSeqDistanceResult(
+        terminal_s=terminal_s or "S",
+        terminal_r=terminal_r or "R",
         m_pu=float(m),
-        km_from_a=km_a,
-        km_from_b=km_b,
-        z_app=z_app,
-        loop_used=loop,
+        km_from_s=float(km_s),
+        km_from_r=float(km_r),
+        z2lt=z2lt,
+        z2s=z2s,
+        z2r=z2r,
+        root_1=m1,
+        root_2=m2,
     )
 
 

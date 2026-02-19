@@ -31,14 +31,19 @@ from PySide6.QtWidgets import (
 
 from localizador_falta.ansi_protection import ProtectionDecision, evaluate_protections
 from localizador_falta.comtrade_service import ComtradeData, load_comtrade
-from localizador_falta.fault_analysis import DistanceEstimate, FaultReport, analyze_fault, estimate_fault_distance
+from localizador_falta.fault_analysis import (
+    FaultReport,
+    NegativeSeqDistanceResult,
+    analyze_fault,
+    estimate_negative_sequence_distance_two_terminal,
+)
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Localizador de Falta - Proteção ANSI")
-        self.resize(1650, 980)
+        self.resize(1680, 980)
 
         self.current_data: ComtradeData | None = None
         self._apply_theme()
@@ -78,34 +83,76 @@ class MainWindow(QMainWindow):
         toolbar_layout.addWidget(load_btn, 1)
         toolbar_layout.addWidget(analyze_btn, 1)
 
-        distance_box = QGroupBox("Localização da Falta por Impedância Positiva")
-        distance_layout = QHBoxLayout(distance_box)
-        self.z1_mag_input = QLineEdit("12.0")
-        self.z1_ang_input = QLineEdit("75.0")
-        self.z0_mag_input = QLineEdit("36.0")
-        self.z0_ang_input = QLineEdit("75.0")
-        self.lt_len_input = QLineEdit("100.0")
-        self.dist_result_label = QLabel("Distância: aguardando cálculo")
+        distance_box = QGroupBox("Localizador de Defeitos de Sequência Negativa (2 terminais)")
+        distance_layout = QGridLayout(distance_box)
+
+        self.terminal_s_input = QLineEdit("TERMINAL S")
+        self.terminal_r_input = QLineEdit("TERMINAL R")
+        self.z2lt_mod_input = QLineEdit("88.98")
+        self.z2lt_ang_input = QLineEdit("85.86")
+        self.lt_len_input = QLineEdit("334.0")
+
+        self.v2s_mod_input = QLineEdit("26954.0")
+        self.v2s_ang_input = QLineEdit("85.9")
+        self.i2s_mod_input = QLineEdit("782.35")
+        self.i2s_ang_input = QLineEdit("86.4")
+
+        self.v2r_mod_input = QLineEdit("48475.0")
+        self.v2r_ang_input = QLineEdit("-5.2")
+        self.i2r_mod_input = QLineEdit("508.21")
+        self.i2r_ang_input = QLineEdit("59.2")
+
+        self.calc_dist_btn = QPushButton("Calcular Distância Seq. Negativa")
+        self.calc_dist_btn.clicked.connect(self.calculate_negative_seq_distance)
+
+        self.dist_result_label = QLabel("Distância: aguardando cálculo manual")
         self.dist_result_label.setObjectName("statusWarn")
-        distance_layout.addWidget(QLabel("|Z1| (ohm):"))
-        distance_layout.addWidget(self.z1_mag_input)
-        distance_layout.addWidget(QLabel("∠Z1 (graus):"))
-        distance_layout.addWidget(self.z1_ang_input)
-        distance_layout.addWidget(QLabel("|Z0| (ohm):"))
-        distance_layout.addWidget(self.z0_mag_input)
-        distance_layout.addWidget(QLabel("∠Z0 (graus):"))
-        distance_layout.addWidget(self.z0_ang_input)
-        distance_layout.addWidget(QLabel("LT total (km):"))
-        distance_layout.addWidget(self.lt_len_input)
-        distance_layout.addWidget(self.dist_result_label, 3)
+
+        row = 0
+        distance_layout.addWidget(QLabel("Terminal S:"), row, 0)
+        distance_layout.addWidget(self.terminal_s_input, row, 1)
+        distance_layout.addWidget(QLabel("Terminal R:"), row, 2)
+        distance_layout.addWidget(self.terminal_r_input, row, 3)
+
+        row += 1
+        distance_layout.addWidget(QLabel("Impedância total LT |Z2LT| (ohms):"), row, 0)
+        distance_layout.addWidget(self.z2lt_mod_input, row, 1)
+        distance_layout.addWidget(QLabel("∠Z2LT (graus):"), row, 2)
+        distance_layout.addWidget(self.z2lt_ang_input, row, 3)
+        distance_layout.addWidget(QLabel("Comprimento LT (km):"), row, 4)
+        distance_layout.addWidget(self.lt_len_input, row, 5)
+
+        row += 1
+        distance_layout.addWidget(QLabel("V2 extremidade S - Mód (V):"), row, 0)
+        distance_layout.addWidget(self.v2s_mod_input, row, 1)
+        distance_layout.addWidget(QLabel("∠V2S (graus):"), row, 2)
+        distance_layout.addWidget(self.v2s_ang_input, row, 3)
+        distance_layout.addWidget(QLabel("I2 extremidade S - Mód (A):"), row, 4)
+        distance_layout.addWidget(self.i2s_mod_input, row, 5)
+        distance_layout.addWidget(QLabel("∠I2S (graus):"), row, 6)
+        distance_layout.addWidget(self.i2s_ang_input, row, 7)
+
+        row += 1
+        distance_layout.addWidget(QLabel("V2 extremidade R - Mód (V):"), row, 0)
+        distance_layout.addWidget(self.v2r_mod_input, row, 1)
+        distance_layout.addWidget(QLabel("∠V2R (graus):"), row, 2)
+        distance_layout.addWidget(self.v2r_ang_input, row, 3)
+        distance_layout.addWidget(QLabel("I2 extremidade R - Mód (A):"), row, 4)
+        distance_layout.addWidget(self.i2r_mod_input, row, 5)
+        distance_layout.addWidget(QLabel("∠I2R (graus):"), row, 6)
+        distance_layout.addWidget(self.i2r_ang_input, row, 7)
+
+        row += 1
+        distance_layout.addWidget(self.calc_dist_btn, row, 0, 1, 3)
+        distance_layout.addWidget(self.dist_result_label, row, 3, 1, 5)
 
         main_splitter = QSplitter(Qt.Horizontal)
 
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
-
         plots_box = QGroupBox("Oscilografia")
         plots_layout = QVBoxLayout(plots_box)
+
         self.wave_plot = pg.PlotWidget(title="Curvas de Onda (IA/IB/IC)")
         self.wave_plot.addLegend(offset=(10, 10))
         self.wave_plot.showGrid(x=True, y=True, alpha=0.25)
@@ -165,18 +212,62 @@ class MainWindow(QMainWindow):
 
         main_splitter.addWidget(left_panel)
         main_splitter.addWidget(right_panel)
-        main_splitter.setSizes([1150, 500])
+        main_splitter.setSizes([1160, 520])
 
         footer = QFrame()
         footer_layout = QHBoxLayout(footer)
         footer_layout.addWidget(QLabel("Modo: Engenharia de Proteção | ANSI Completo"))
         footer_layout.addStretch()
-        footer_layout.addWidget(QLabel("Versão UX Profissional"))
+        footer_layout.addWidget(QLabel("Localizador Seq. Negativa (S/R)"))
 
         main_layout.addWidget(toolbar_box)
         main_layout.addWidget(distance_box)
         main_layout.addWidget(main_splitter, 1)
         main_layout.addWidget(footer)
+
+    def _to_float(self, value: str) -> float:
+        return float(value.strip().replace(",", "."))
+
+    def _update_dist_label_error(self) -> None:
+        self.dist_result_label.setObjectName("statusWarn")
+        self.dist_result_label.setText("Distância: cálculo inválido")
+        self.dist_result_label.style().unpolish(self.dist_result_label)
+        self.dist_result_label.style().polish(self.dist_result_label)
+
+    def calculate_negative_seq_distance(self) -> None:
+        try:
+            result = estimate_negative_sequence_distance_two_terminal(
+                terminal_s=self.terminal_s_input.text().strip(),
+                terminal_r=self.terminal_r_input.text().strip(),
+                z2lt_mod=self._to_float(self.z2lt_mod_input.text()),
+                z2lt_ang_deg=self._to_float(self.z2lt_ang_input.text()),
+                line_length_km=self._to_float(self.lt_len_input.text()),
+                v2s_mod=self._to_float(self.v2s_mod_input.text()),
+                v2s_ang_deg=self._to_float(self.v2s_ang_input.text()),
+                i2s_mod=self._to_float(self.i2s_mod_input.text()),
+                i2s_ang_deg=self._to_float(self.i2s_ang_input.text()),
+                v2r_mod=self._to_float(self.v2r_mod_input.text()),
+                v2r_ang_deg=self._to_float(self.v2r_ang_input.text()),
+                i2r_mod=self._to_float(self.i2r_mod_input.text()),
+                i2r_ang_deg=self._to_float(self.i2r_ang_input.text()),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Erro no cálculo de distância", str(exc))
+            self._update_dist_label_error()
+            return
+
+        self._update_distance_panel(result)
+
+    def _update_distance_panel(self, result: NegativeSeqDistanceResult) -> None:
+        self.dist_result_label.setObjectName("statusOk")
+        self.dist_result_label.setText(
+            f"{result.terminal_s}: {result.km_from_s:.2f} km | {result.terminal_r}: {result.km_from_r:.2f} km | "
+            f"m={result.m_pu:.5f} | raízes=({result.root_1:.5f}, {result.root_2:.5f}) | "
+            f"Z2S={abs(result.z2s):.2f}∠{np.degrees(np.angle(result.z2s)):.1f}° | "
+            f"Z2R={abs(result.z2r):.2f}∠{np.degrees(np.angle(result.z2r)):.1f}°"
+        )
+        self.dist_result_label.style().unpolish(self.dist_result_label)
+        self.dist_result_label.style().polish(self.dist_result_label)
 
     def select_files(self) -> None:
         cfg, _ = QFileDialog.getOpenFileName(self, "Selecione o arquivo CFG", str(Path.home()), "CFG Files (*.cfg)")
@@ -190,28 +281,6 @@ class MainWindow(QMainWindow):
         self.cfg_label.setText(f"CFG: {cfg}")
         self.dat_label.setText(f"DAT: {dat}")
 
-    def _read_distance_inputs(self) -> tuple[complex, complex, float]:
-        try:
-            z1_mag = float(self.z1_mag_input.text().replace(",", "."))
-            z1_ang_deg = float(self.z1_ang_input.text().replace(",", "."))
-            z0_mag = float(self.z0_mag_input.text().replace(",", "."))
-            z0_ang_deg = float(self.z0_ang_input.text().replace(",", "."))
-            lt_len = float(self.lt_len_input.text().replace(",", "."))
-        except ValueError as exc:
-            raise ValueError("Campos de distância inválidos. Use números para |Z1|, ângulo e LT.") from exc
-
-        z1 = z1_mag * np.exp(1j * np.radians(z1_ang_deg))
-        z0 = z0_mag * np.exp(1j * np.radians(z0_ang_deg))
-        return z1, z0, lt_len
-
-    def _update_distance_panel(self, result: DistanceEstimate) -> None:
-        self.dist_result_label.setObjectName("statusOk")
-        self.dist_result_label.setText(
-            f"Loop {result.loop_used} | A: {result.km_from_a:.2f} km | B: {result.km_from_b:.2f} km | m={result.m_pu:.3f} pu | Zapp={abs(result.z_app):.2f}∠{np.degrees(np.angle(result.z_app)):.1f}°"
-        )
-        self.dist_result_label.style().unpolish(self.dist_result_label)
-        self.dist_result_label.style().polish(self.dist_result_label)
-
     def run_analysis(self) -> None:
         cfg_text = self.cfg_label.text().replace("CFG: ", "")
         dat_text = self.dat_label.text().replace("DAT: ", "")
@@ -223,8 +292,6 @@ class MainWindow(QMainWindow):
             data = load_comtrade(cfg_text, dat_text)
             report = analyze_fault(data)
             protections = evaluate_protections(report)
-            z1, z0, lt_len = self._read_distance_inputs()
-            distance = estimate_fault_distance(data, report, z1, lt_len, z0_ohm_per_line=z0)
             self.current_data = data
         except Exception as exc:
             QMessageBox.critical(self, "Erro na análise", str(exc))
@@ -232,10 +299,6 @@ class MainWindow(QMainWindow):
             self.status_label.setObjectName("statusWarn")
             self.status_label.style().unpolish(self.status_label)
             self.status_label.style().polish(self.status_label)
-            self.dist_result_label.setObjectName("statusWarn")
-            self.dist_result_label.setText("Distância: não calculada")
-            self.dist_result_label.style().unpolish(self.dist_result_label)
-            self.dist_result_label.style().polish(self.dist_result_label)
             return
 
         self._draw_waveforms(data)
@@ -243,8 +306,7 @@ class MainWindow(QMainWindow):
         self._draw_symmetrical(report)
         self._update_report(data, report)
         self._update_protections(protections)
-        self._update_events(data, report, protections, distance)
-        self._update_distance_panel(distance)
+        self._update_events(data, report, protections)
 
     def _draw_waveforms(self, data: ComtradeData) -> None:
         self.wave_plot.clear()
@@ -342,14 +404,12 @@ class MainWindow(QMainWindow):
         data: ComtradeData,
         report: FaultReport,
         protections: list[ProtectionDecision],
-        distance: DistanceEstimate,
     ) -> None:
         self.events_list.clear()
         events = [
             f"[T={report.fault_start_s:.4f}s] Início de distúrbio detectado",
             f"Tipo de falta identificado: {report.detected_fault}",
             f"Fase provável: {report.probable_phase}",
-            f"Distância estimada ({distance.loop_used}): A={distance.km_from_a:.2f} km | B={distance.km_from_b:.2f} km",
             f"Canal digital monitorado: {len(data.status)}",
         ]
 
