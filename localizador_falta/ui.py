@@ -264,7 +264,7 @@ class MainWindow(QMainWindow):
             f"{result.terminal_s}: {result.km_from_s:.2f} km | {result.terminal_r}: {result.km_from_r:.2f} km | "
             f"m={result.m_pu:.5f} | raízes=({result.root_1:.5f}, {result.root_2:.5f}) | "
             f"Z2S={abs(result.z2s):.2f}∠{np.degrees(np.angle(result.z2s)):.1f}° | "
-            f"Z2R={abs(result.z2r):.2f}∠{np.degrees(np.angle(result.z2r)):.1f}°"
+            f"Z2R={abs(result.z2r):.2f}∠{np.degrees(np.angle(result.z2r)):.1f}° | {result.method_note}"
         )
         self.dist_result_label.style().unpolish(self.dist_result_label)
         self.dist_result_label.style().polish(self.dist_result_label)

@@ -57,6 +57,7 @@ class NegativeSeqDistanceResult:
     z2r: complex
     root_1: float
     root_2: float
+    method_note: str
 
 
 def _find_channel(analog: Dict[str, np.ndarray], aliases: tuple[str, ...]) -> np.ndarray:
@@ -305,18 +306,37 @@ def estimate_negative_sequence_distance_two_terminal(
         raise ValueError("Coeficiente A inválido para solução da equação de 2º grau.")
 
     disc = B * B - 4 * A * C
-    if disc < 0:
-        raise ValueError("Discriminante negativo no cálculo de distância por sequência negativa.")
+    note = "raiz real direta"
 
-    sqrt_disc = float(np.sqrt(disc))
-    m1 = float((-B + sqrt_disc) / (2 * A))
-    m2 = float((-B - sqrt_disc) / (2 * A))
+    if disc >= 0:
+        sqrt_disc = complex(np.sqrt(disc), 0.0)
+    else:
+        # Evita falha operacional: em caso de discriminante negativo,
+        # usa raízes complexas e seleciona a parte real fisicamente consistente.
+        sqrt_disc = np.sqrt(complex(disc, 0.0))
+        note = "discriminante negativo: solução via raízes complexas"
 
-    valid_roots = [m for m in (m1, m2) if 0 <= m <= 1]
+    r1 = (-B + sqrt_disc) / (2 * A)
+    r2 = (-B - sqrt_disc) / (2 * A)
+
+    m1 = float(np.real(r1))
+    m2 = float(np.real(r2))
+
+    candidates = []
+    for r in (r1, r2):
+        if abs(np.imag(r)) <= 0.05:
+            candidates.append(float(np.real(r)))
+
+    valid_roots = [m for m in candidates if 0 <= m <= 1]
     if valid_roots:
         m = valid_roots[0]
+    elif candidates:
+        m = min(candidates, key=lambda root: min(abs(root), abs(root - 1)))
+        note += " | raiz real fora de faixa, aplicada saturação"
     else:
-        m = min((m1, m2), key=lambda root: min(abs(root), abs(root - 1)))
+        # fallback robusto se as duas raízes forem fortemente complexas
+        m = float(np.clip(-B / (2 * A), 0.0, 1.0))
+        note += " | fallback por vértice parabólico"
 
     km_s = max(0.0, min(1.0, m)) * line_length_km
     km_r = line_length_km - km_s
@@ -332,6 +352,7 @@ def estimate_negative_sequence_distance_two_terminal(
         z2r=z2r,
         root_1=m1,
         root_2=m2,
+        method_note=note,
     )
 
 
